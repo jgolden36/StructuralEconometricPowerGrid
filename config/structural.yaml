@@ -1,0 +1,59 @@
+# Declarative estimation spec consumed by estimation/*. Keep specs here, not in code.
+
+seed: 20260621
+
+stage1_shortrun:
+  # Ancillary-services stacked DiD (eq:aux_did) reusing the reduced-form estimator.
+  products: [reg_up, reg_down, spin, nonspin]   # ancillary product j
+  event_window: { pre: 6, post: 12 }            # leads K- / lags K+ in months
+  fixed_effects: [zone_by_event, time_by_event] # γ_{z,m}, δ_{t,m}
+  controls: [weather, fuel_price, residual_nonai_load, iso_by_month_of_sample]
+  cluster: unit
+  # price -> demand mapping (eq:aux_demand_from_price)
+  demand_map:
+    elasticity_d: 0.0          # baseline inelastic; set <0 for general-case robustness
+    supply_elasticity_source: iso_posted_supply_curve
+
+stage2_calibration:
+  # Λ map (eq:zeta_map): partially-linear regression of ζ on θ^tech, X^exp nonparam.
+  zeta_components: [ramp_rate, thd, power_factor, transient, inertia]
+  tech_params: [chip_gen, quantization, batch_size, cooling, pfc_topology, storage_config]
+  nonparam_controls: [exp_design_state]
+  partial_linear:
+    nuisance_learner: random_forest
+    n_folds: 5
+  cross_check:
+    tolerance_rel: 0.25        # twin Δ^aux vs Stage-1 DiD ΔD^aux agreement band
+
+stage3_longrun:
+  # Moment inequalities (eq:moment_ineq), Holmes/Pakes-style.
+  deviation_classes: [location_swap, procurement_swap, capacity_swap, storage_swap]
+  perturbation:
+    location: { max_zone_shift: 1 }
+    procurement: { modes: [merch, REC, PPA, Colo] }
+    capacity: { dk_grid_mw: [-500, -100, 100, 500] }
+    storage: { ds_grid_mwh: [-200, 200], channels: [arbitrage, backup, aux] }
+  free_entry:
+    by: [fuel, zone, contract_structure]   # eq:gen_free_entry
+  inference:
+    method: andrews_soares
+    subsample_B: 500
+    alpha: 0.05
+
+equilibrium:
+  # Markov-perfect equilibrium solved by estimation/equilibrium.py.
+  discount_beta: 0.92
+  storage_roundtrip_eta: 0.88
+  price_clearing:
+    max_iter: 200
+    tol: 1.0e-6
+    damping: 0.5
+  shadow_prices: [headroom, cleanpool]       # λ^H, λ^Z
+  location_pruning:
+    method: arkolakis_separability           # eq:separability
+    verify_single_crossing: true
+  entry_ordering: [Colo, PPA, merch]         # entry_Colo ≥ entry_PPA ≥ entry_merch
+
+counterfactual:
+  report: [partial_equilibrium, general_equilibrium]
+  scenarios_dir: outputs/counterfactuals

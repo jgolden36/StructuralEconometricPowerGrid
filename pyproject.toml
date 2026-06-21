@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sepg-struct"
+version = "0.1.0"
+description = "Structural econometric model of AI demand, generator investment, and power quality"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Dana Golden", email = "dana.golden@stonybrook.edu" }]
+
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.1",
+    "polars>=0.20",
+    "pyarrow>=14.0",
+    "xarray>=2024.1",
+    "zarr>=2.16",
+    "statsmodels>=0.14",
+    "linearmodels>=5.3",
+    "networkx>=3.2",
+    "geopandas>=0.14",
+    "shapely>=2.0",
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+fast = ["numba>=0.59", "jax>=0.4.20"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.3",
+    "mypy>=1.8",
+]
+
+[project.scripts]
+sepg-struct = "sepg_struct.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sepg_struct"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true

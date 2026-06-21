@@ -1,0 +1,24 @@
+# Load blocks B with weights ω_b. Built by build/blocks.py.
+# Canonical B = 8 = peak/off-peak (2) × season (2) × renewable-availability tercile,
+# collapsed here to a representative 8-block partition. Weights ω_b must sum to 1.
+
+partition:
+  dimensions:
+    time_of_day: [peak, offpeak]
+    season: [summer, winter]
+    renewables: [low, high]   # availability terciles collapsed to {low, high}
+
+# Each block carries representative load scale, renewable availability, and a
+# baseline ancillary-services requirement multiplier (relative to mean).
+blocks:
+  - { id: b1, time_of_day: peak,    season: summer, renewables: low,  omega: 0.10, ren_avail: 0.20, aux_req_mult: 1.30 }
+  - { id: b2, time_of_day: peak,    season: summer, renewables: high, omega: 0.10, ren_avail: 0.70, aux_req_mult: 1.15 }
+  - { id: b3, time_of_day: offpeak, season: summer, renewables: low,  omega: 0.15, ren_avail: 0.25, aux_req_mult: 1.00 }
+  - { id: b4, time_of_day: offpeak, season: summer, renewables: high, omega: 0.15, ren_avail: 0.75, aux_req_mult: 0.90 }
+  - { id: b5, time_of_day: peak,    season: winter, renewables: low,  omega: 0.10, ren_avail: 0.30, aux_req_mult: 1.20 }
+  - { id: b6, time_of_day: peak,    season: winter, renewables: high, omega: 0.10, ren_avail: 0.65, aux_req_mult: 1.05 }
+  - { id: b7, time_of_day: offpeak, season: winter, renewables: low,  omega: 0.15, ren_avail: 0.35, aux_req_mult: 0.95 }
+  - { id: b8, time_of_day: offpeak, season: winter, renewables: high, omega: 0.15, ren_avail: 0.80, aux_req_mult: 0.85 }
+
+# Granularity standard h for REC matching (0 = annual, 1 = hourly/24-7 CFE).
+granularity_h: 0.0

@@ -1,0 +1,33 @@
+# Directed network G = (Z, A). Built by build/network.py.
+# Canonical E = 3 echelons: upstream / transit / downstream.
+# Forward inter-echelon arcs require e(j) = e(i) + 1.
+
+echelons:
+  - { id: 0, name: upstream }    # remote generation pools
+  - { id: 1, name: transit }     # transmission/interface zones
+  - { id: 2, name: downstream }  # load/data-center zones
+
+zones:
+  # zone -> echelon mapping; iso/ba for joining to data
+  - { id: Z_GEN_W,  echelon: 0, iso: SPP,   ba: SWPP }
+  - { id: Z_GEN_S,  echelon: 0, iso: ERCOT, ba: ERCO }
+  - { id: Z_INT_A,  echelon: 1, iso: PJM,   ba: PJM }
+  - { id: Z_INT_B,  echelon: 1, iso: MISO,  ba: MISO }
+  - { id: Z_DC_E,   echelon: 2, iso: PJM,   ba: PJM }   # NoVA-style DC cluster
+  - { id: Z_DC_T,   echelon: 2, iso: ERCOT, ba: ERCO }
+
+# Forward arcs with annual transfer capacity T̄_a (MW). Where FERC 715 is
+# coarser than zone defs, allocate T̄ in proportion to constituent-zone load.
+arcs:
+  - { src: Z_GEN_W, dst: Z_INT_B, t_bar_mw: 4500 }
+  - { src: Z_GEN_S, dst: Z_INT_A, t_bar_mw: 3000 }
+  - { src: Z_INT_A, dst: Z_DC_E,  t_bar_mw: 6000 }
+  - { src: Z_INT_B, dst: Z_DC_E,  t_bar_mw: 2500 }
+  - { src: Z_INT_A, dst: Z_DC_T,  t_bar_mw: 1500 }
+
+# Optional intra-echelon arcs (e(j) = e(i)); empty by default.
+intra_arcs: []
+
+# Clean-MW pool eligibility (feeds λ^Z cleanpool shadow price).
+clean_pool:
+  qualifying_fuels: [wind, solar, hydro, nuclear]
