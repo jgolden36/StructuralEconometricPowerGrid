@@ -21,8 +21,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
-build/
-dist/
+# NOTE: anchored to repo root so it does NOT match the src/sepg_struct/build/ package
+/build/
+/dist/
 .venv/
 venv/
 .mypy_cache/
