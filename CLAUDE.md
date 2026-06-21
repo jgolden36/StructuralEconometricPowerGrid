@@ -2,40 +2,54 @@
 
 Guidance for Claude Code (and humans) working in this repository.
 
-This repo backs the paper **"Certificates without Electrons? Theory and
-Evidence on Impacts from AI-Driven Power Demand"** (`Energy_CAS1 (1) (3).tex`)
-and its structural companion **"A Structural Econometric Model of AI Demand,
-Generator Investment, and Power Quality"** (`StructuralModelAIForPowerGrid
-(4).tex`). The papers estimate the causal grid-level effects of AI model
-releases (power quality, fossil-fuel demand, wholesale prices, ancillary
-services) using staggered difference-in-differences (DiD) and a structural
-procurement-and-entry model built around a **timing wedge**.
+This repo backs the **structural** paper **"A Structural Econometric Model of
+AI Demand, Generator Investment, and Power Quality"**
+(`StructuralModelAIForPowerGrid (4).tex`). It builds a dynamic
+procurement-and-entry game around a **timing wedge** and estimates it in three
+stages, then runs policy counterfactuals by re-solving the equilibrium.
 
-This document specifies the **code suite** needed to (1) acquire the data,
-(2) build the analysis panel, (3) develop/estimate the models, and (4) test,
-validate, and run counterfactuals. Treat it as the contract for how the
-codebase is organized; keep it in sync as code lands.
+The reduced-form companion **"Certificates without Electrons?"**
+(`Energy_CAS1 (1) (3).tex`) **already has its own code suite** — the staggered
+difference-in-differences (DiD), IV/2SLS, power-quality, and robustness
+estimators described in that paper are built and live upstream. **This suite
+does not re-implement them.** It *consumes* them: the structural Stage 1 is a
+stacked DiD on ancillary-services prices that reuses the existing DiD machinery
+and validation suite, and the structural model takes the reduced-form
+DiD-implied demand shift as a moment to match. Where this document references a
+"reduced-form" estimator, treat it as an existing dependency to import, not new
+code to write.
+
+This document specifies the **structural code suite**: (1) acquire the
+structural data, (2) build the network/block/demand objects, (3) estimate the
+three structural stages and solve the equilibrium, and (4) validate and run
+counterfactuals. Treat it as the contract for how the codebase is organized;
+keep it in sync as code lands.
 
 ---
 
 ## 1. What the suite must do
 
 The pipeline runs end-to-end as four stages. Each stage is independently
-runnable and caches its outputs so downstream stages do not re-fetch.
+runnable and caches its outputs so downstream stages do not re-fetch or
+re-estimate.
 
 1. **Get data** — pull each raw source into `data/raw/` with a manifest.
-2. **Build** — clean, harmonize spatial/temporal units, link sources, and
-   construct the treatment, producing the analysis panels in `data/processed/`.
-3. **Estimate (develop + train)** — fit the reduced-form DiD/IV models and
-   the structural model; write coefficients to `outputs/estimates/`.
-4. **Test** — parallel-trends, placebo, PSM/IPW, sensitivity, and structural
-   over-identification checks; then counterfactuals to `outputs/`.
+2. **Build** — construct the network graph, load blocks, demand-side objects,
+   treatment exposure, and the marginal-carbon-intensity panel in
+   `data/processed/`.
+3. **Estimate (develop + train)** — run the three-stage estimator (short-run
+   ancillary DiD → experimental calibration → long-run moment inequalities) and
+   solve the equilibrium; write parameters/confidence sets to
+   `outputs/estimates/`.
+4. **Test** — pre-trends/placebo (reused from the reduced-form suite), the
+   twin↔observation cross-check, over-identification/moment-match diagnostics,
+   equilibrium convergence checks; then counterfactuals to `outputs/`.
 
-The "model" here is econometric: the deliverables are **estimated treatment
-effects, elasticities, and structural parameters**, not a predictive ML model.
-"Train" = estimate/fit; "test" = validate identifying assumptions and run
-robustness. Where the paper trains small LLMs to measure GPU energy
-(`GPU Experiments`), that is a calibration input, not the main estimator.
+The deliverables are **structural parameters, partial-identification confidence
+sets, and counterfactual equilibria** — not a predictive ML model. "Train" =
+estimate/calibrate; "test" = validate identifying assumptions and equilibrium
+solution. The digital-twin/GPU experiments are a **calibration input** (the
+`Λ` map), not the main estimator.
 
 ---
 
@@ -44,20 +58,25 @@ robustness. Where the paper trains small LLMs to measure GPU energy
 ```
 .
 ├── CLAUDE.md                      # this file
-├── Energy_CAS1 (1) (3).tex        # reduced-form paper (DiD; primary reference)
-├── StructuralModelAIForPowerGrid (4).tex   # structural paper
+├── StructuralModelAIForPowerGrid (4).tex   # structural paper (source of truth)
+├── Energy_CAS1 (1) (3).tex        # reduced-form paper (existing suite; reference only)
 ├── README.md
 ├── pyproject.toml                 # deps + console-script entry points
 ├── config/
 │   ├── sources.yaml               # API endpoints, paths, credentials refs
-│   ├── samples.yaml               # sample definitions (conservative → broad)
-│   └── models.yaml                # estimation specs, horizons, FE, controls
-├── src/sepg/                      # package: Structural Econometric Power Grid
+│   ├── network.yaml               # echelons, zones, arcs, transfer caps
+│   ├── blocks.yaml                # load-block definition + weights ω_b
+│   └── structural.yaml            # estimation specs: moments, grids, priors, tol
+├── src/sepg_struct/               # package: structural suite
 │   ├── data/                      # Stage 1: acquisition (one module per source)
-│   ├── build/                     # Stage 2: cleaning, linkage, treatment, panel
-│   ├── estimation/                # Stage 3: reduced-form + structural estimators
-│   ├── validation/                # Stage 4a: assumption tests & robustness
-│   ├── counterfactual/            # Stage 4b: scenario engine
+│   ├── build/                     # Stage 2: network, blocks, demand, exposure, MCI
+│   ├── estimation/                # Stage 3: 3-stage estimator + equilibrium solver
+│   │   ├── stage1_shortrun.py
+│   │   ├── stage2_calibration.py
+│   │   ├── stage3_longrun.py
+│   │   └── equilibrium.py
+│   ├── validation/                # Stage 4a: cross-checks & diagnostics
+│   ├── counterfactual/            # Stage 4b: policy scenario engine
 │   └── utils/                     # geo, time, io, logging, caching
 ├── data/{raw,interim,processed}/  # gitignored; rebuilt from manifests
 ├── outputs/{estimates,figures,tables,counterfactuals}/
@@ -68,166 +87,202 @@ robustness. Where the paper trains small LLMs to measure GPU energy
 Conventions:
 - Pure functions in `build/` and `estimation/`; side effects (downloads, file
   writes) live behind thin `data/` and `utils/io` wrappers so they are mockable.
-- Every dataset carries a `source`, `vintage`, and `geo_resolution` tag.
+- The reduced-form DiD package is a dependency, imported (e.g.
+  `from sepg.estimation import stacked_did, pretrends, placebo`); never vendored.
 - Secrets (S&P Capital IQ, Aterio, Whisker Labs keys) come from env vars
   referenced in `config/sources.yaml`; never hard-code or commit them.
 
 ---
 
-## 3. Stage 1 — Data acquisition (`src/sepg/data/`)
+## 3. Stage 1 — Data acquisition (`src/sepg_struct/data/`)
 
 One module per source. Each exposes `fetch(config) -> path` and writes to
 `data/raw/<source>/` plus a row in `data/raw/manifest.csv`
-(`source, file, vintage, rows, sha256, fetched_at`). Sources, content, and the
-analysis role come straight from the papers' data tables.
+(`source, file, vintage, rows, sha256, fetched_at`). Sources and the model
+object each informs come from §"Data" of the structural paper.
 
-| Module | Source | Pulls | Granularity / coverage | Role |
-|---|---|---|---|---|
-| `aterio.py` | **Aterio** registry | Data-center location, operator, MW capacity, build/expand/retire dates, **AI-use flag**, **on-site-generation flag** | Facility level, ~3,862 centers | Treatment definition; model→company→DC crosswalk; colocation counterfactual |
-| `whisker.py` | **Whisker Labs** | **CPQI** (surges/sags/brownouts/interruptions) and **THD** (waveform distortion) | County/utility, monthly (THD hourly), 2022–2025, 72 utilities | DiD outcome variables (power quality) |
-| `campd.py` | **EPA CAMPD/CAMD** | Hourly generator demand (MWh), **heat rates** (Btu/kWh), emissions | Unit-hour, ~thousands of generators, 2021–2023 (~22M generator-hours) | Fossil-demand outcome; heat rate IV |
-| `spglobal.py` | **S&P Capital IQ Pro** | Natural-gas (Henry Hub) prices; **PPA** timing/counterparty/tenor/form; REC prices; asset/financing events | Daily prices; contract level | Price IV & fuel control; structural contracting margin |
-| `meteostat.py` | **Meteostat** | Temperature, dewpoint, precipitation | County/station, hourly | Demand & renewable controls; PSM covariates |
-| `iso.py` | **ISOs** (PJM Data Miner, ERCOT, CAISO, MISO, NYISO, ISO-NE, SPP) | Zonal/nodal LMPs, capacity-auction prices, **ancillary-services** clearing prices/quantities, zonal boundary shapefiles | Zonal, hourly; 54 zones (PJM focus: 20 zones) | Price outcomes/controls; ancillary-services DiD (structural) |
-| `eia.py` | **EIA** Forms 860/923/930/715 | Retail service-territory shapefiles; generator capacity/fuel/retirement; hourly load & interchange by BA; transmission topology/transfer capacity | Utility / BA / arc level | Treatment boundaries; geo reconciliation; network flow (structural) |
-| `epoch.py` | **Epoch** database | Model release dates, training compute (FLOPs), parameter counts | Model level, ~75 models | Treatment timing; scaling & efficiency counterfactuals |
-| `releases.py` | Press releases / news / SEC filings | Verified training locations, training windows, API release dates | Model level (subset) | Conservative "verified" sample; staggered treatment anchor |
+| Module | Source | Pulls | Structural object informed |
+|---|---|---|---|
+| `aterio.py` | **Aterio** registry (+ S&P 451/DC Bytes, interconnection-queue filings for cross-validation) | DC location, operator, MW capacity, build status, announced expansions; AI-use & on-site-generation flags | Hyperscaler capacity stock `K_{f,z,t}^σ`; zone exposure shares |
+| `spglobal.py` | **S&P Capital IQ Pro** (+ SEC filings, LevelTen PPA index) | PPA timing/counterparty/tenor/contracted-capacity/buyer-type/form (physical vs virtual); FID/COD financing events; REC prices; gas prices | Contracting margin vs entry margin; financing-rate `r_l(σ²)`; PPA bargaining `ζ_f`; `p^REC` |
+| `epoch.py` | **Epoch** + corporate announcements | Release dates, training-compute estimates, release windows, train/infer workload mix | Treatment timing; model quality `q_{f,t}`; train/infer allocation |
+| `eia.py` | **EIA** Forms 860/923/930/715 | Generator capacity/fuel/heat-rate/retirement (860/923); hourly load/interchange/net-gen by BA (930); transmission topology & transfer capacities (715) | Generator state; residual non-AI load `D^O_{z,t}`; arcs `A` & `T̄_{a,t}` |
+| `epa_camd.py` | **EPA CAMD** (+ ISO unit-level dispatch where available) | Day-ahead generation, fuel use, emissions | Dispatch; marginal carbon intensity `MCI_{z,b,t}` |
+| `iso.py` | **ISOs** (PJM Data Miner, ERCOT MIS, CAISO OASIS, MISO, NYISO, ISO-NE, SPP) | Nodal/zonal LMPs; capacity-auction clears (PJM BRA, ISO-NE FCA, NYISO ICAP) + ELCC derating; **ancillary-services clearing prices & quantities by product `j` and zone**; supply-curve slopes | Exogenous `p^ene`, `p^cap`; **aux-services price `p^aux` (DiD outcome) & supply elasticity `ε^s`** |
+| `recs.py` | **S&P Global Platts**, M-RETS, PJM-GATS, state compliance reports | REC issuance/retirement records, compliance prices | REC market clearing; granularity standard `h` |
+| `whisker.py` | **Whisker Labs** | THD / voltage-sag at utility-month | Aggregate validation of the `Λ` map (predicted vs observed THD) |
+| `twin.py` | **CEWIT/AERTC** digital twin + micro data center | Trial-level `(X^exp, θ^tech, ζ, η)`: power/voltage/current/frequency/harmonics/reactive power under varied technical params | `Λ` calibration; `g_j` signature→aux-demand map |
 
 Notes:
-- **Release date is the primary treatment anchor** (training start/location are
-  usually unobserved). `releases.py` produces the verified subset (4 models with
-  exact training date + location; API dates for >half of foundational models).
-- Geographic assets (ISO/EIA shapefiles) are digitized maps — store as GeoJSON
-  in `data/raw/geo/` and version the digitization script.
-- Be polite to APIs: cache, back off, and respect the manifest so re-runs are
-  incremental. Several sources are proprietary — gate them behind credentials
-  and ship synthetic fixtures in `tests/fixtures/` for CI.
+- **Model release date is the treatment anchor** for the Stage-1 DiD (timing
+  plausibly unrelated to any single zone's aux-services market).
+- Geographic/topology assets (ISO zone boundaries, FERC 715 arcs) are digitized
+  — store as GeoJSON in `data/raw/geo/` and version the digitization script;
+  where Form 715 is coarser than the zone definitions, allocate `T̄` in
+  proportion to constituent-zone load.
+- Several sources are proprietary (Aterio, S&P, Whisker, twin) — gate behind
+  credentials and ship synthetic fixtures in `tests/fixtures/` for CI.
 
 ---
 
-## 4. Stage 2 — Build & linkage (`src/sepg/build/`)
+## 4. Stage 2 — Build the structural objects (`src/sepg_struct/build/`)
 
-The core data-engineering contribution: "no single clean dataset contains all
-variables." Harmonize **spatial** (facility → county → utility territory → ISO
-zone → balancing authority) and **temporal** (hour ↔ month) units, then link.
+Turn raw sources into the primitives the estimator and equilibrium solver
+consume. Harmonize spatial (facility → zone → echelon → BA) and temporal
+(hour → load block → annual period) units.
 
-- `geo.py` — crosswalks via point-in-polygon and radius joins:
-  - DC → **utility service territory** (EIA) for the power-quality panel.
-  - DC → **generators within a 20-mile radius** (CAMPD) for the demand panel.
-  - Generator/DC → **ISO zone** (digitized boundaries) and → county.
-- `treatment.py` — implements Appendix "Treatment Definition and Data Linkage":
-  1. Flag AI data centers using Aterio's AI-use field.
-  2. Crosswalk **model → developing company → all AI DCs of that company**.
-  3. Build event-time exposure `D_{ut}^k = 1[event-time = k] × Treated_u`
-     for horizons `k ∈ [-K, K]` (leads = training window, lags = inference).
-  4. Emit treatment variants: binary, **intensity** (count/MW of AI DCs),
-     verified-timing subset, and multi-BA-dropped subset (for sensitivity).
-- `panel.py` — assemble the stacked/long panels:
-  - **Power-quality panel**: utility-month, CPQI/THD + weather + regional load.
-  - **Fossil-demand panel**: generator-month (from generator-hour), demand +
-    heat rate + gas price + weather + zonal price.
-  - **Price panel**: PJM zonal, LMP + demand/supply shifters.
-  - **Stacked panel**: per release event `m`, treated + clean not-yet-treated
-    controls in window `[r_m−K, r_m+K]`, then stacked (Cengiz/Deshpande style)
-    so no already-treated unit is ever a control.
-- `samples.py` — materialize `config/samples.yaml`: the conservative verified
-  sample (4 models) up through progressively broader sets, each with its caveats.
-- `validate_build.py` — schema/range checks reproducing the paper's summary
-  stats as guardrails (CPQI mean≈0.52 sd≈0.42; THD mean≈1.81 sd≈6.77; CAMPD
-  demand mean≈218 MW sd≈158; wholesale ≈$51/MWh; temp≈17°C). Fail loud on drift.
+- `network.py` — build the directed graph `G = (Z, A)` from `config/network.yaml`:
+  echelons `E` (canonical `E=3`: upstream/transit/downstream), zones `Z_e`,
+  forward inter-echelon arcs (`e(j)=e(i)+1`), optional intra-echelon arcs, and
+  transfer capacities `T̄_{a,t}`. Emit adjacency + capacity tensors.
+- `blocks.py` — partition each annual period into load blocks `B` with weights
+  `ω_b` (e.g. peak/off-peak × season × renewable-availability tercile, `B=8`),
+  per `config/blocks.yaml`. Each block carries representative load, renewable
+  availability, and aux-services requirement.
+- `demand.py` — assemble the demand side:
+  - Gross IT load `D^M = ρ_train·K_train + ρ_infer·K_infer` (Eq. `eq:gross_load`).
+  - Net grid draw `G^M` with PPA/colo/storage/backup offsets and the storage
+    energy-balance + ramp constraints (Eqs. `eq:grid_draw`, `eq:storage_balance`).
+  - Residual non-AI load `D^O` = EIA Form-930 load − estimated DC load.
+  - Timing wedge per block `w_{f,z,b,t}(h) = G^M − R^{M,G}` (granularity `h`).
+- `exposure.py` — shift-share treatment exposure `D^k_{z,t,m}` at zone-month:
+  firm-`f` model-release event (shift) × zone-`z` exposure share (Aterio DC mix ×
+  Epoch-inferred train/infer allocation). Feeds the Stage-1 DiD (Eq. `eq:aux_did`).
+- `carbon.py` — marginal carbon intensity `MCI_{z,b,t}` from CAMD + dispatch
+  reconstruction, for the emissions accounting (Eq. `eq:emissions`).
+- `validate_build.py` — schema/range checks; reconcile Aterio capacity against
+  S&P/queue filings; verify aux-services panel completeness by product `j`.
 
-Output: tidy parquet panels in `data/processed/` keyed by `(unit, time, event)`.
+Output: tidy parquet/zarr tensors in `data/processed/` keyed by
+`(firm, zone, block, period)` and `(zone, period, event)`.
 
 ---
 
-## 5. Stage 3 — Estimation / "develop, train" (`src/sepg/estimation/`)
+## 5. Stage 3 — Estimation / "develop, train" (`src/sepg_struct/estimation/`)
 
-### 5.1 Reduced-form DiD (primary; `Energy_CAS1`)
+Three-stage estimation mirroring §"Estimation Strategy", exploiting the model's
+separation between the long-run game, the short-run clearing, and the
+experimental calibration.
 
-- `did.py` — canonical two-way FE DiD (Eq. `eq:DiD`) as the teaching/baseline
-  spec: `Y_it = α + β(Treat_i × Post_t) + γ_i + δ_t + ε_it`.
-- `stacked_did.py` — **stacked DiD with multiple horizons** (Eq. `eq:stacked`),
-  the main estimator. Returns dynamic coefficients `{β_k}` with unit-by-event
-  and time-by-event FE; SEs clustered at the unit level. Used for:
-  - **Power quality**: CPQI and THD specs (`eq:pq_eventstudy`, `eq:thd_eventstudy`).
-  - **Fossil demand**: generator-month outcome (`eq:demand_eventstudy`).
-- `iv.py` — **2SLS** for the demand model. First stage instruments price with
-  generator **heat rate × natural-gas price** (`eq:firststage`); second stage
-  puts predicted price `p̂` into the stacked-DiD demand spec. Report first-stage
-  strength and the structural price elasticity (paper: ≈0.135, SE 0.013).
-- `price_effects.py` — map the demand shift to prices via a **linear supply
-  curve** `Q^s = a + b·p` estimated by IV (demand-side instruments:
-  weather-driven load, industrial production), yielding
-  `%Δp = %ΔQ^d / ε^s` (`eq:price-impact-elasticity`). PJM zonal only.
-- Alternative estimators for robustness: **Callaway–Sant'Anna** and
-  **Borusyak–Jaravel–Spiess** imputation (wrap `differences`/`did_imputation`).
+### 5.1 Stage 1 — Short-run estimation (`stage1_shortrun.py`)
 
-Each estimator returns a standard `EstimationResult` (coefficients, vcov,
-sample id, spec hash) serialized to `outputs/estimates/`. Keep specs declarative
-in `config/models.yaml` (outcome, horizons K, FE, controls, sample, cluster).
+- **Ancillary-services stacked DiD** (Eq. `eq:aux_did`): estimate `β^j_k` for
+  each product `j` using model releases as the staggered shock. **Reuse the
+  reduced-form suite's stacked-DiD estimator** with zone-by-event `γ_{z,m}` and
+  time-by-event `δ_{t,m}` FE, controls `X` (weather, fuel prices, residual
+  non-AI load, ISO×month-of-sample), and unit-clustered SEs.
+- **Price→demand mapping** (Eq. `eq:aux_demand_from_price`): convert the price
+  coefficient to an implied demand shift
+  `ΔD^aux = β^j_k · ε^s · Q̄^aux` using the ISO-published supply-curve slope
+  `ε^s` at the pre-shock clearing point (general case nets `ε^d`). This
+  `ΔD^aux` is the **moment** Stage 2 must reproduce in aggregate.
+- LMPs, capacity prices, and REC prices are **imported as data**, not estimated.
 
-### 5.2 Structural model (`StructuralModelAIForPowerGrid`)
+### 5.2 Stage 2 — Experimental calibration (`stage2_calibration.py`)
 
-Three-stage estimation (`structural/`), mirroring §"Estimation Strategy":
+- Estimate the **`Λ` map** (Eq. `eq:zeta_map`) by **partially-linear regression**
+  of each load-shape signature component `ζ` on technical parameters `θ^tech`,
+  controlling **nonparametrically** for the experimental design state `X^exp`.
+- Compose `Λ̂` with the engineering map `g_j` to get per-MW aux-services demand;
+  aggregate to the within-facility partial `Δ^aux_j(ζ, K)`.
+- **Cross-validate**: aggregate twin-implied `Δ^aux` against the Stage-1
+  DiD-implied `ΔD^aux`. This is the integration diagnostic — the twin is
+  *tested*, not assumed correct.
 
-- `stage1_shortrun.py` — ancillary-services stacked DiD (`eq:aux_did`); map the
-  DiD price coefficient to an implied ancillary-services demand quantity via the
-  ISO supply-curve slope. Import LMPs, capacity, and REC prices as data.
-- `stage2_calibration.py` — partially-linear regression of load-shape signatures
-  `ζ` on technical params `θ^tech` (digital-twin/GPU experiments), controlling
-  nonparametrically for design state; produces `Λ̂`. Cross-validate twin-implied
-  vs. observation-implied `Δ^aux`.
-- `stage3_longrun.py` — **moment-inequality** estimation of the hyperscaler
-  problem (Holmes-style): observed portfolios dominate unilateral deviations
-  (location / procurement / capacity / storage swaps), plus generator free-entry
-  and PPA-bargaining moments. Partial-identification inference (Andrews-style
-  confidence sets).
-- `equilibrium.py` — the procurement-and-entry game: timing wedge
-  `W = E[(ℓ−m)⁺]`, instrument-specific delivery for REC/PPA/BTM, endogenous
-  financing `ρ(θ)=ρ0+λ·CV(R_θ)`, and free-entry capacity `K_θ`. This is the
-  simulator the counterfactuals call.
+### 5.3 Stage 3 — Long-run estimation (`stage3_longrun.py`)
+
+- **Moment inequalities** (Holmes/Pakes-style, Eq. `eq:moment_ineq`): observed
+  firm portfolios dominate small unilateral deviations in expected discounted
+  profit. Construct four deviation classes — **location swaps** (zone
+  attractiveness), **procurement swaps** (`Γ`, `r_l`, mode costs), **capacity
+  swaps** (contest `α_f`, `η`), **storage swaps** (the three storage channels).
+  Deviations must be feasible under headroom/clean-pool given observed rival
+  capacity.
+- **Generator free-entry** moments (Eq. `eq:gen_free_entry`): match observed
+  entry by fuel/zone/contract-structure to model-predicted entry; identifies
+  `I^build` and `r_l(σ²)`.
+- **PPA bargaining**: identify `ζ_f` from observed PPA prices vs model-implied
+  outside options (Eq. `eq:ppa_bargain`).
+- **Contest/reputation**: `(η, α_f, θ_f)` from joint distribution of Epoch
+  model quality, compute build-out, and investment flows; `γ_f` from
+  procurement-mode × sustainability-commitment correlations.
+- **Inference**: partial-identification confidence sets (Andrews–Soares /
+  Andrews–style); uniqueness is not assumed.
+
+### 5.4 Equilibrium solver (`equilibrium.py`)
+
+The Markov-perfect equilibrium of the long-run game — the object the
+counterfactuals re-solve. Components:
+
+- Hyperscaler Bellman (Eq. `eq:hyper_bellman`) over actions
+  `(ΔK, σ, ΔS, B)`; payoff = investor contest reward `v_{f,t}` (Eq. `eq:contest`)
+  − total cost (Eq. `eq:hyper_cost`) − outage cost − reputational emissions
+  penalty `Γ(γ_f, E_{f,t})`.
+- Generator Bellman (Eq. `eq:gen_bellman`) with energy/aux/capacity/REC revenue
+  and the financing-rate entry hierarchy `entry_Colo ≥ entry_PPA ≥ entry_merch`.
+- Short-run market clearing per block: energy, capacity, REC, and the
+  behavioral **ancillary-services** market (the rest imported as cost curves).
+- Resource constraints clear via shadow prices: interconnection headroom
+  `λ^H_{z,t}` (Eq. `eq:headroom`) and clean-MW pool `λ^Z_{z,t}` (Eq. `eq:cleanpool`).
+- **Combinatorial location pruning** (Arkolakis-style) using the conditional
+  separability in `(C_{f,t}, E_{f,t})` (Eq. `eq:separability`), nested as the
+  **inner loop of the price-clearing fixed point**: prune given
+  `(λ^H, λ^Z)`, re-clear constraints, iterate to convergence. Verify the
+  single-crossing condition in `C` numerically at the estimated parameters.
+
+Each stage writes a standard `EstimationResult` (parameters/confidence set,
+moments, spec hash, data vintages) to `outputs/estimates/`. Keep specs
+declarative in `config/structural.yaml` (moment set, action grids, tolerances,
+inference settings).
 
 ---
 
-## 6. Stage 4a — Validation & robustness (`src/sepg/validation/`)
+## 6. Stage 4a — Validation & diagnostics (`src/sepg_struct/validation/`)
 
-Implements §"Validating Assumptions and Robustness". These gate the headline
-results — run them before trusting any estimate.
+These gate the headline results — run them before trusting any estimate.
 
-- `pretrends.py` — joint F-test that pre-release leads `{β_k : k<0}` = 0; plus
-  per-lead CIs. Significant pre-trends invalidate causal reading.
-- `placebo.py` — randomized **treatment timing** (reshuffle release dates) and
-  randomized **treatment assignment** (reshuffle treated units); compare actual
-  estimate to the placebo distribution (randomization-inference p-value).
-- `psm.py` — **propensity-score matching / IPW** (Appendix `APP:PSM`): logit on
-  pre-trend load growth, temp, dewpoint, precip, heat rate, gas price; trim to
-  common support `[0.1, 0.9]`; stabilized weights capped at `[0.01, 100]` and
-  normalized within group; re-estimate weighted DiD.
-- `sensitivity.py` — vary treatment definition: intensity weighting, drop
-  multi-BA companies, verified-timing-only, and **radius sweeps** (generator
-  match distance). Heterogeneity by model scale / company / release year.
-- `structural_checks.py` — over-identification / moment-match diagnostics and
-  the Stage-1↔Stage-2 `Δ^aux` cross-validation.
+- `pretrends.py`, `placebo.py` — **reuse the reduced-form suite** for the
+  Stage-1 aux-services DiD: joint F-test on pre-period leads, randomized
+  treatment-timing/assignment placebos, and the Callaway–Sant'Anna and
+  Borusyak–Jaravel–Spiess alternative estimators as robustness checks.
+- `cross_check.py` — the twin↔observation `Δ^aux` reconciliation (Stage-1 vs
+  Stage-2) and the aggregate Whisker-Labs THD validation of the `Λ` map. If the
+  twin-only path cannot reproduce the aggregates, the DiD number is binding and
+  technical-decomposition counterfactuals are flagged provisional.
+- `moment_checks.py` — over-identification / moment-match diagnostics for the
+  Stage-3 inequalities; report which moments bind and the slackness profile.
+- `equilibrium_checks.py` — fixed-point convergence, single-crossing
+  verification, existence/uniqueness diagnostics, and sensitivity of the
+  confidence set to action-grid resolution.
 
 ---
 
-## 7. Stage 4b — Counterfactuals (`src/sepg/counterfactual/`)
+## 7. Stage 4b — Counterfactuals (`src/sepg_struct/counterfactual/`)
 
-Driven by `equilibrium.py` parameters + reduced-form coefficients
-(§"Counterfactual Analysis"). Each scenario maps to a model prediction
-(Table `tab:predictions`).
+Each scenario re-solves the Markov-perfect equilibrium with a modified
+constraint set, holding structural parameters at their estimated values, and
+compares portfolios/prices/emissions/aux-demand/reliability to baseline.
+**Report both the partial-equilibrium effect (entry fixed) and the
+general-equilibrium effect (entry responds)** — the gap is itself informative.
 
-- `scaling.py` — Epoch parameter/FLOP trends → grid impact; efficiency
-  elasticities linking demand to power-quality coefficients (P. amplification).
-- `geographic.py` — (a) cloud→**edge** inference: redistribute inference impact
-  across non-AI DCs (per-node spike/variance falls); (b) **relocation** of
-  training to energy-abundant low-load regions (higher load–availability
-  alignment). Appendix sensitivity for comms/efficiency losses.
-- `colocation.py` — re-estimate with/without Aterio on-site-generation flag;
-  report the **sign reversal** in power-quality effects (P. colocation).
-- `policy.py` (structural) — REC-market elimination, national REC market,
-  24/7 CFE mandate, bring-your-own-generation, transmission/generation mandates,
-  composite scenarios.
+- `relocation.py` — redistribute inference/training across zones (alter
+  admissible `Z_f`); trade aux-services relief at downstream zones against
+  transmission utilization.
+- `technical.py` — fleet-wide technical changes (INT8 quantization, distilled
+  models, power-factor correction, cross-firm batch scheduling): perturb
+  `θ^tech`, map through `Λ̂` to a new `ζ`, re-aggregate to a zone demand shift,
+  re-solve. **Uniquely enabled by the experimental platform.**
+- `supply_policy.py` — transmission expansion (`↑T̄_a`) and build-rate subsidy
+  (`↓I^build`).
+- `byog.py` — bring-your-own-generation: restrict `σ ∈ {PPA, Colo}` at
+  constrained zones; quantify entry response via the financing channel.
+- `rec_policy.py` — REC-market elimination (`φ=0`), national REC market
+  (`S^qual = Σ_z' S`), and **24/7 CFE** (granularity `h=1`, hourly matching →
+  shift toward colocation-plus-storage).
+- `aux_market.py` — aux-services market redesign (fast-frequency-response
+  product, incremental vs proportional cost attribution, DR product).
+- `composite.py` — multi-lever scenarios ("high-clean", "high-efficiency") to
+  reveal policy complementarities/substitutions.
 
 Outputs: tables/figures to `outputs/counterfactuals/` with the scenario config
 and the estimates vintage they consumed recorded alongside.
@@ -240,36 +295,40 @@ Console scripts (defined in `pyproject.toml`) wrap each stage; a `Makefile`/CLI
 chains them:
 
 ```bash
-sepg data fetch --source all            # Stage 1 → data/raw/ + manifest
-sepg build panel --sample conservative  # Stage 2 → data/processed/
-sepg estimate --spec power_quality      # Stage 3 (also: fossil_demand, price)
-sepg estimate --spec structural --stage 1,2,3
-sepg validate --spec power_quality --all # Stage 4a: pretrends+placebo+psm+sens
-sepg counterfactual --scenario scaling,geographic,colocation
-sepg report                             # regenerate outputs/tables + figures
+sepg-struct data fetch --source all              # Stage 1 → data/raw/ + manifest
+sepg-struct build --network config/network.yaml  # Stage 2 → data/processed/
+sepg-struct estimate --stage 1                    # short-run aux DiD → ΔD^aux
+sepg-struct estimate --stage 2                    # twin calibration → Λ̂, g_j
+sepg-struct estimate --stage 3                    # moment-inequality params + CS
+sepg-struct solve --equilibrium baseline          # MPE at estimated params
+sepg-struct validate --all                        # Stage 4a diagnostics
+sepg-struct counterfactual --scenario 24x7,byog,relocation
+sepg-struct report                                # regenerate outputs/tables + figures
 ```
 
-`sepg run --sample conservative` executes the whole chain. Estimation and
-counterfactual commands are pinned to a `--sample` and an estimates vintage so
-results are reproducible.
+`sepg-struct run` executes the whole chain. Estimation and counterfactual
+commands are pinned to an estimates vintage so results are reproducible.
 
 ---
 
 ## 9. Stack & conventions
 
-- **Python 3.11+**. Econometrics: `pyfixest` or `linearmodels` (FE/IV),
-  `differences` (Callaway–Sant'Anna), `statsmodels`. Data: `pandas`/`polars`,
-  `pyarrow`. Geo: `geopandas`, `shapely`. Config: `pydantic` + YAML.
-  (R via `rpy2` is acceptable for `did`/`fixest` if a Python equivalent is
-  missing — keep it optional and isolated.)
-- **Determinism**: set seeds for placebo/PSM resampling; record them in outputs.
-- **Clustering**: default cluster at the unit (utility/generator) level; make it
-  configurable per spec.
-- **Testing**: `pytest`. Unit-test crosswalks and estimators against tiny
-  synthetic fixtures with known answers; one end-to-end smoke test on fixtures
-  must run in CI without any proprietary credentials.
+- **Python 3.11+**. Econometrics/inference: `statsmodels`, `linearmodels`,
+  partial-ID moment-inequality code (custom or `pyDID`-adjacent); reuse the
+  reduced-form package for stacked DiD / CS / BJS. Numerics: `numpy`/`scipy`,
+  `jax` or `numba` for the equilibrium fixed point. Data: `pandas`/`polars`,
+  `pyarrow`, `xarray`/`zarr` for the `(f,z,b,t)` tensors. Geo: `geopandas`,
+  `shapely`, `networkx` for the arc graph. Config: `pydantic` + YAML.
+- **Determinism**: set and record seeds for placebo resampling, moment-inequality
+  subsampling, and any stochastic equilibrium initialization.
+- **Equilibrium discipline**: log fixed-point residuals and iteration counts;
+  fail loud if the price-clearing loop does not converge within tolerance.
+- **Testing**: `pytest`. Unit-test the network build, block aggregation, the
+  price→demand mapping, and the equilibrium solver on tiny synthetic economies
+  with known fixed points; one end-to-end smoke test on fixtures must run in CI
+  without any proprietary credentials.
 - **Reproducibility**: every figure/table writes a sidecar JSON with the spec
-  hash, sample id, data vintages, and git SHA. Don't hand-edit `outputs/`.
+  hash, estimates vintage, data vintages, and git SHA. Don't hand-edit `outputs/`.
 - **Don't commit** `data/raw`, `data/processed`, secrets, or large binaries.
 
 ---
@@ -278,17 +337,19 @@ results are reproducible.
 
 | Paper object | Where it lives |
 |---|---|
-| Eq. `eq:DiD` (canonical DiD) | `estimation/did.py` |
-| Eq. `eq:stacked`, `eq:pq_eventstudy`, `eq:demand_eventstudy` | `estimation/stacked_did.py` |
-| First stage `eq:firststage` / 2SLS | `estimation/iv.py` |
-| `%Δp = %ΔQ^d/ε^s` | `estimation/price_effects.py` |
-| Timing wedge `W`, REC/PPA/BTM, entry `K_θ` | `estimation/structural/equilibrium.py` |
-| 3-stage structural estimation | `estimation/structural/stage{1,2,3}_*.py` |
-| Treatment linkage (model→company→DC, 20-mi) | `build/treatment.py`, `build/geo.py` |
-| Data sources (Table `tab:DataSources`) | `data/*.py` |
-| Pre-trends / placebo / PSM-IPW / sensitivity | `validation/*.py` |
-| Scaling / edge / relocation / colocation / policy | `counterfactual/*.py` |
+| Network `G=(Z,A)`, echelons, arcs `T̄` (Eqs. `eq:lr_state`, headroom/cleanpool) | `build/network.py` |
+| Load blocks `B`, weights `ω_b` | `build/blocks.py` |
+| Gross/net load, storage balance, timing wedge (Eqs. `eq:gross_load`–`eq:storage_balance`) | `build/demand.py` |
+| Shift-share exposure `D^k_{z,t,m}` | `build/exposure.py` |
+| Aux-services DiD (Eq. `eq:aux_did`) + price→demand (Eq. `eq:aux_demand_from_price`) | `estimation/stage1_shortrun.py` (DiD reused from reduced-form suite) |
+| `Λ` map / `g_j` calibration (Eq. `eq:zeta_map`) | `estimation/stage2_calibration.py` |
+| Moment inequalities, free-entry, PPA bargaining (Eqs. `eq:moment_ineq`, `eq:gen_free_entry`, `eq:ppa_bargain`) | `estimation/stage3_longrun.py` |
+| Hyperscaler/generator Bellman, shadow prices, location pruning (Eqs. `eq:hyper_bellman`, `eq:gen_bellman`, `eq:separability`) | `estimation/equilibrium.py` |
+| Pre-trends / placebo / CS / BJS | `validation/*` (imported from reduced-form suite) |
+| Twin↔obs `Δ^aux` cross-check, THD validation | `validation/cross_check.py` |
+| 9 counterfactuals + composites (§"Counterfactual Analysis") | `counterfactual/*` |
+| Data sources (§"Data") | `data/*.py` |
 
-When the papers and code disagree, the **`.tex` files are the source of truth**
-for specifications, samples, and identifying assumptions — update the code (and
-this map) to match, and flag the discrepancy.
+When the paper and code disagree, the **`.tex` file is the source of truth** for
+specifications, moments, and identifying assumptions — update the code (and this
+map) to match, and flag the discrepancy.
