@@ -1,0 +1,41 @@
+# Data (rebuilt from manifests; never committed)
+data/raw/
+data/interim/
+data/processed/
+
+# Outputs are regenerated; don't hand-edit or commit large binaries.
+# (directory skeleton is kept via .gitkeep; contents are ignored)
+outputs/figures/*
+outputs/tables/*
+outputs/counterfactuals/*
+outputs/estimates/*
+!outputs/**/.gitkeep
+
+# Secrets
+.env
+*.key
+config/secrets.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+# NOTE: anchored to repo root so it does NOT match the src/sepg_struct/build/ package
+/build/
+/dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

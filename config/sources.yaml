@@ -1,0 +1,85 @@
+# Stage 1 data sources. One block per `data/` module.
+# Credentials are referenced by env-var NAME only; never store secrets here.
+# Each source writes to data/raw/<source>/ and appends to data/raw/manifest.csv.
+
+defaults:
+  raw_dir: data/raw
+  manifest: data/raw/manifest.csv
+  timeout_s: 60
+  retries: 4
+
+sources:
+  aterio:
+    module: sepg_struct.data.aterio
+    proprietary: true
+    credentials_env: ATERIO_API_KEY
+    endpoint: https://api.aterio.io/v1
+    pulls: [dc_location, operator, mw_capacity, build_status, expansions, ai_use_flag, onsite_gen_flag]
+    cross_validate: [sp_451, dc_bytes, interconnection_queue]
+
+  spglobal:
+    module: sepg_struct.data.spglobal
+    proprietary: true
+    credentials_env: SP_CAPITALIQ_KEY
+    endpoint: https://api.capitaliq.spglobal.com
+    pulls: [ppa_terms, fid_cod_events, rec_prices, gas_prices, levelten_ppa_index]
+
+  epoch:
+    module: sepg_struct.data.epoch
+    proprietary: false
+    endpoint: https://epoch.ai/data
+    pulls: [release_dates, training_compute, release_windows, workload_mix]
+
+  eia:
+    module: sepg_struct.data.eia
+    proprietary: false
+    credentials_env: EIA_API_KEY
+    endpoint: https://api.eia.gov/v2
+    forms: [860, 923, 930, 715]
+
+  epa_camd:
+    module: sepg_struct.data.epa_camd
+    proprietary: false
+    endpoint: https://api.epa.gov/easey
+    pulls: [generation, fuel_use, emissions]
+
+  iso:
+    module: sepg_struct.data.iso
+    proprietary: false
+    isos:
+      pjm:   { endpoint: https://api.pjm.com/api/v1,         datasets: [lmp, capacity_bra, ancillary] }
+      ercot: { endpoint: https://www.ercot.com/mp/data-products, datasets: [lmp, ancillary] }
+      caiso: { endpoint: http://oasis.caiso.com/oasisapi,    datasets: [lmp, ancillary] }
+      miso:  { endpoint: https://api.misoenergy.org,         datasets: [lmp, ancillary] }
+      nyiso: { endpoint: https://www.nyiso.com/public,       datasets: [lmp, icap, ancillary] }
+      isone: { endpoint: https://webservices.iso-ne.com/api/v1.1, datasets: [lmp, fca, ancillary] }
+      spp:   { endpoint: https://portal.spp.org/web/portal,  datasets: [lmp, ancillary] }
+    pulls: [lmp, capacity_clears, elcc_derating, ancillary_prices, ancillary_quantities, supply_slopes]
+
+  recs:
+    module: sepg_struct.data.recs
+    proprietary: true
+    credentials_env: SP_PLATTS_KEY
+    pulls: [rec_issuance, rec_retirement, compliance_prices]
+    registries: [mrets, pjm_gats]
+
+  whisker:
+    module: sepg_struct.data.whisker
+    proprietary: true
+    credentials_env: WHISKER_LABS_KEY
+    pulls: [thd, voltage_sag]
+    grain: utility_month
+
+  twin:
+    module: sepg_struct.data.twin
+    proprietary: true
+    credentials_env: CEWIT_TWIN_KEY
+    pulls: [power, voltage, current, frequency, harmonics, reactive_power]
+    grain: trial
+
+geo:
+  raw_dir: data/raw/geo
+  digitization_script: src/sepg_struct/build/digitize_zones.py
+  assets:
+    - iso_zone_boundaries.geojson
+    - ferc715_arcs.geojson
